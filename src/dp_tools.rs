@@ -37,6 +37,11 @@ impl EslConnection {
         let digit = digit.as_str().unwrap().to_string();
         Ok(digit)
     }
+
+    /// used for mod_dptools:info
+    pub async fn info(&self) -> Result<Event, EslError> {
+        self.execute("info", "").await
+    }
 }
 
 fn parse_json_body(body: &str) -> Result<HashMap<String, Value>, EslError> {

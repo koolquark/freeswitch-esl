@@ -67,6 +67,7 @@ impl EslConnection {
         let commands = Arc::new(Mutex::new(VecDeque::new()));
         let inner_commands = Arc::clone(&commands);
         let background_jobs = Arc::new(Mutex::new(HashMap::new()));
+        // this is same as background jobs ; inner is for wrapping in future; its just a clone
         let inner_background_jobs = Arc::clone(&background_jobs);
         let esl_codec = EslCodec {};
         let (read_half, write_half) = tokio::io::split(stream);
@@ -84,6 +85,9 @@ impl EslConnection {
             call_uuid: None,
             connection_info: None,
         };
+        // up to this is init 
+        // the following future lives for ever 
+
         tokio::spawn(async move {
             loop {
                 if let Some(Ok(event)) = transport_rx.next().await {
@@ -95,6 +99,7 @@ impl EslConnection {
                             }
                             "text/event-json" => {
                                 trace!("got event-json");
+                                // check for body and load it 
                                 let data = event
                                     .body()
                                     .clone()
@@ -102,12 +107,16 @@ impl EslConnection {
 
                                 let event_body = parse_json_body(&data)
                                     .expect("Unable to parse body of event-json");
+                                // check for a Job-UUID
                                 let job_uuid = event_body.get("Job-UUID");
                                 if let Some(job_uuid) = job_uuid {
                                     let job_uuid = job_uuid.as_str().unwrap();
+                                    // try to remove the job having this uuid (since we got completion) from jobs  
                                     if let Some(tx) =
                                         inner_background_jobs.lock().await.remove(job_uuid)
                                     {
+                                        // sent the event to the api user via channel stored in job kv
+                                        // job_uuid , tx channel towards api user
                                         tx.send(event)
                                             .expect("Unable to send channel message from bgapi");
                                     }
