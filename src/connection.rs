@@ -46,14 +46,20 @@ impl EslConnection {
         self.connected.load(Ordering::Relaxed)
     }
     pub(crate) async fn send(&self, item: &[u8]) -> Result<(), EslError> {
+        let cmd = std::str::from_utf8(item).unwrap_or("cant_convert");
+        trace!(fs_cmd = cmd, "obtain lock for transport_tx to send cmd");
         let mut transport = self.transport_tx.lock().await;
+        trace!(fs_cmd = cmd , "sending cmd via transport_tx");
         transport.send(item).await
     }
     /// sends raw message to freeswitch and receives reply
     pub async fn send_recv(&self, item: &[u8]) -> Result<Event, EslError> {
+        let cmd = std::str::from_utf8(item).unwrap_or("cant_convert");
         self.send(item).await?;
         let (tx, rx) = channel();
+        trace!(fs_cmd = cmd , "get lock on inner commands and push tx");
         self.commands.lock().await.push_back(tx);
+        trace!(fs_command = cmd, "pushed tx to commands ; wait for rx event");
         Ok(rx.await?)
     }
 
@@ -89,6 +95,7 @@ impl EslConnection {
         // the following future lives for ever 
 
         tokio::spawn(async move {
+            trace!("spawned for handling new connection");
             loop {
                 if let Some(Ok(event)) = transport_rx.next().await {
                     if let Some(event_type) = event.headers.get("Content-Type") {
@@ -165,6 +172,11 @@ impl EslConnection {
                         }
                     }
                     if let Some(tx) = inner_commands.lock().await.pop_front() {
+                        // when send_recv has sent a command to FS via send function
+                        // it creates a oneshot channel and pushes the tx of that channel to commands 
+                        // Here we take the last pushed tx and sends the reply event (persumably reply of the
+                        // last fs command) received from FS
+                        trace!("sending event received from from fs to api user");
                         tx.send(event).expect("msg");
                     }
                 }
@@ -181,18 +193,18 @@ impl EslConnection {
             // setup procedures for the Freeswitch ESL Connection
             // send connect and myevents
             EslConnectionType::Outbound => {
-                trace!("outbound_sending_connect");
+                trace!("outbound -> sending_connect");
                 let response = connection.send_recv(b"connect").await?;
-                trace!("outbound_send_connect");
+                trace!("outbound -> sent_connect");
                 trace!("{:?}", response);
                 connection.connection_info = Some(response.headers().clone());
                 let response = connection
                     .subscribe(vec!["BACKGROUND_JOB", "CHANNEL_EXECUTE_COMPLETE"])
                     .await?;
                 trace!("{:?}", response);
-                trace!("outbound_sending_myevents");
+                trace!("outbound -> sending_myevents");
                 let response = connection.send_recv(b"myevents").await?;
-                trace!("outbound_send_myevents");
+                trace!("outbound -> send_myevents");
                 trace!("{:?}", response);
                 let connection_info = connection.connection_info.as_ref().unwrap();
 
