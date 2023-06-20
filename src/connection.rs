@@ -110,6 +110,157 @@ impl EslConnection {
                                 // check for a Job-UUID
                                 let job_uuid = event_body.get("Job-UUID");
                                 if let Some(job_uuid) = job_uuid {
+
+                                    let job_uuid = job_uuid.as_str().unwrap();
+                                    trace!("got job uuid = {}", job_uuid);
+                                    // try to remove the job having this uuid (since we got completion) from jobs  
+                                    if let Some(tx) =
+                                        inner_background_jobs.lock().await.remove(job_uuid)
+                                    {
+                                        trace!("job uuid {} found in bg jobs and removed" , job_uuid);
+                                        // sent the event to the api user via channel stored in job kv
+                                        // job_uuid , tx channel towards api user
+                                        tx.send(event)
+                                            .expect("Unable to send channel message from bgapi");
+                                    }
+                                    trace!("continued");
+                                    continue;
+                                }
+                                if let Some(application_uuid) = event_body.get("Application-UUID") {
+                                    trace!("found app uuid {} ; use as job_uuid" , application_uuid);
+                                    let job_uuid = application_uuid.as_str().unwrap();
+                                    if let Some(event_name) = event_body.get("Event-Name") {
+                                        if let Some(event_name) = event_name.as_str() {
+                                            if event_name == "CHANNEL_EXECUTE_COMPLETE" {
+                                                trace!("got channel execute complete for job_uuid {} " , job_uuid);
+                                                if let Some(tx) = inner_background_jobs
+                                                    .lock()
+                                                    .await
+                                                    .remove(job_uuid)
+                                                {
+                                                    trace!("removed job_uuid {} from bg jobs" , job_uuid);
+                                                    tx.send(event).expect(
+                                                        "Unable to send channel message from bgapi",
+                                                    );
+                                                }
+                                                trace!("continued");
+                                                trace!("got channel execute complete");
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                                // for inbound case ?
+                                if let Some(ref listener) = listener {
+                                    if let Err(e) = listener.send(event_body).await {
+                                        trace!("got error forwarding event event to listener: {}", e);
+                                    }
+                                }
+                                
+                                continue;
+                            }
+                            _ => {
+                                trace!("got another event {:?}", event);
+                            }
+                        }
+                    }
+                    if let Some(tx) = inner_commands.lock().await.pop_front() {
+                        tx.send(event).expect("msg");
+                    }
+                }
+            }
+        });
+        match connection_type {
+            EslConnectionType::Inbound => {
+                let auth_response = connection.auth().await?;
+                trace!("auth_response {:?}", auth_response);
+                connection
+                    .subscribe(vec!["BACKGROUND_JOB", "CHANNEL_EXECUTE_COMPLETE"])
+                    .await?;
+            }
+            // setup procedures for the Freeswitch ESL Connection
+            // send connect and myevents
+            EslConnectionType::Outbound => {
+                trace!("outbound_sending_connect");
+                let response = connection.send_recv(b"connect").await?;
+                trace!("outbound_send_connect");
+                trace!("{:?}", response);
+                connection.connection_info = Some(response.headers().clone());
+                let response = connection
+                    .subscribe(vec!["BACKGROUND_JOB", "CHANNEL_EXECUTE_COMPLETE"])
+                    .await?;
+                trace!("{:?}", response);
+                trace!("outbound_sending_myevents");
+                let response = connection.send_recv(b"myevents").await?;
+                trace!("outbound_send_myevents");
+                trace!("{:?}", response);
+                let connection_info = connection.connection_info.as_ref().unwrap();
+
+                let channel_unique_id = connection_info
+                    .get("Channel-Unique-ID")
+                    .unwrap()
+                    .as_str()
+                    .unwrap();
+                connection.call_uuid = Some(channel_unique_id.to_string());
+            }
+        }
+        Ok(connection)
+    }
+
+
+    pub(crate) async fn with_codec(
+        stream: TcpStream,
+        password: impl ToString,
+        connection_type: EslConnectionType,
+        listener: Option<mpsc::Sender<HashMap<String, Value>>>,
+    ) -> Result<Self, EslError> {
+        // let sender = Arc::new(sender);
+        let commands = Arc::new(Mutex::new(VecDeque::new()));
+        let inner_commands = Arc::clone(&commands);
+        let background_jobs = Arc::new(Mutex::new(HashMap::new()));
+        // this is same as background jobs ; inner is for wrapping in future; its just a clone
+        let inner_background_jobs = Arc::clone(&background_jobs);
+        let esl_codec = EslCodec {};
+        let (read_half, write_half) = tokio::io::split(stream);
+        let mut transport_rx = FramedRead::new(read_half, esl_codec.clone());
+        let transport_tx = Arc::new(Mutex::new(FramedWrite::new(write_half, esl_codec.clone())));
+        if connection_type == EslConnectionType::Inbound {
+            transport_rx.next().await;
+        }
+        let mut connection = Self {
+            password: password.to_string(),
+            commands,
+            background_jobs,
+            transport_tx,
+            connected: AtomicBool::new(false),
+            call_uuid: None,
+            connection_info: None,
+        };
+        // up to this is init 
+        // the following future lives for ever 
+
+        tokio::spawn(async move {
+            loop {
+                if let Some(Ok(event)) = transport_rx.next().await {
+                    if let Some(event_type) = event.headers.get("Content-Type") {
+                        match event_type.as_str().unwrap() {
+                            "text/disconnect-notice" => {
+                                trace!("got disconnect notice");
+                                return;
+                            }
+                            "text/event-json" => {
+                                trace!("got event-json");
+                                // check for body and load it 
+                                let data = event
+                                    .body()
+                                    .clone()
+                                    .expect("Unable to get body of event-json");
+
+                                let event_body = parse_json_body(&data)
+                                    .expect("Unable to parse body of event-json");
+                                // check for a Job-UUID
+                                let job_uuid = event_body.get("Job-UUID");
+                                if let Some(job_uuid) = job_uuid {
                                     let job_uuid = job_uuid.as_str().unwrap();
                                     // try to remove the job having this uuid (since we got completion) from jobs  
                                     if let Some(tx) =
@@ -192,6 +343,8 @@ impl EslConnection {
         }
         Ok(connection)
     }
+
+
 
     /// subscribes to given events
     pub async fn subscribe(&self, events: Vec<&str>) -> Result<Event, EslError> {
