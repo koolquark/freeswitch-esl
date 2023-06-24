@@ -103,12 +103,12 @@ impl EslConnection {
                             "text/disconnect-notice" => {
 
                                 trace!(code = "got-fs-disconnect", "got disconnect from fs ; exiting the future");
-                                trace!(code = "closing-client-channels-on-fs-disconnect", "closing client channel");
+                                // trace!(code = "closing-client-channels-on-fs-disconnect", "closing client channel");
 
-                                for tx in  inner_commands.lock().await.iter_mut() {
-                                    drop(tx)
-                                }
-                                trace!(code = "closed-client-channels-on-fs-disconnect", "closing client channel");
+                                // for tx in  inner_commands.lock().await.iter_mut() {
+                                //     drop(tx)
+                                // }
+                                // trace!(code = "closed-client-channels-on-fs-disconnect", "closing client channel");
             
 
                                 // if let Some(mut tx) = inner_commands.lock().await.pop_front() {
