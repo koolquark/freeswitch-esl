@@ -103,21 +103,28 @@ impl EslConnection {
                             "text/disconnect-notice" => {
 
                                 trace!(code = "got-fs-disconnect", "got disconnect from fs ; exiting the future");
+                                trace!(code = "closing-client-channels-on-fs-disconnect", "closing client channel");
 
-                                if let Some(mut tx) = inner_commands.lock().await.pop_front() {
+                                for tx in  inner_commands.lock().await.iter_mut() {
+                                    drop(tx)
+                                }
+                                trace!(code = "closed-client-channels-on-fs-disconnect", "closing client channel");
+            
+
+                                // if let Some(mut tx) = inner_commands.lock().await.pop_front() {
                                     // when send_recv has sent a command to FS via send function
                                     // it creates a oneshot channel and pushes the tx of that channel to commands 
                                     // Here we take the last pushed tx and sends the reply event (persumably reply of the
                                     // last fs command) received from FS
-                                    trace!(code = "closing-client-channel-on-fs-disconnect", "closing client channel");
+                                    
                                     // tx.send(event).expect("msg");
                                     // drop(tx)
 
-                                    for tx in  inner_commands.lock().await.iter_mut() {
-                                        drop(tx)
-                                    }
+                                    // for tx in  inner_commands.lock().await.iter_mut() {
+                                    //     drop(tx)
+                                    // }
                 
-                                }
+                                // }
             
                                 return;
                             }
