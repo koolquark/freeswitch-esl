@@ -179,6 +179,9 @@ impl EslConnection {
                         trace!("sending event received from from fs to api user");
                         tx.send(event).expect("msg");
                     }
+                } else {
+                    trace!(code="stream_rx_none", "transport_rx next returned None");
+                    break
                 }
             }
         });
