@@ -101,7 +101,24 @@ impl EslConnection {
                     if let Some(event_type) = event.headers.get("Content-Type") {
                         match event_type.as_str().unwrap() {
                             "text/disconnect-notice" => {
-                                trace!("got disconnect notice");
+
+                                trace!(code = "got-fs-disconnect", "got disconnect from fs ; exiting the future");
+
+                                if let Some(mut tx) = inner_commands.lock().await.pop_front() {
+                                    // when send_recv has sent a command to FS via send function
+                                    // it creates a oneshot channel and pushes the tx of that channel to commands 
+                                    // Here we take the last pushed tx and sends the reply event (persumably reply of the
+                                    // last fs command) received from FS
+                                    trace!(code = "closing-client-channel-on-fs-disconnect", "closing client channel");
+                                    // tx.send(event).expect("msg");
+                                    // drop(tx)
+
+                                    for tx in  inner_commands.lock().await.iter_mut() {
+                                        drop(tx)
+                                    }
+                
+                                }
+            
                                 return;
                             }
                             "text/event-json" => {
@@ -181,7 +198,16 @@ impl EslConnection {
                     }
                 } else {
                     trace!(code="stream_rx_none", "transport_rx next returned None");
-                    break
+
+                    // if let Some(mut tx) = inner_commands.lock().await.pop_front() {
+                    //     trace!(code = "closing-client-channel-on-no-rx-from-fs", "closing client channel");
+                    //     drop(tx)
+                    // }
+                    trace!(code = "closing-client-channel-on-no-rx-from-fs", "closing client channel");
+                    for tx in  inner_commands.lock().await.iter_mut() {
+                        drop(tx)
+                    }
+                   return
                 }
             }
         });
