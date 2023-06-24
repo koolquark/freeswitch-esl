@@ -101,31 +101,12 @@ impl EslConnection {
                     if let Some(event_type) = event.headers.get("Content-Type") {
                         match event_type.as_str().unwrap() {
                             "text/disconnect-notice" => {
-
+                                trace!(code = "got-fs-disconnect-about-to-drop-all-tx", "got disconnect from fs");
+                                for tx in  inner_commands.lock().await.iter_mut() {
+                                    trace!(code = "got-fs-disconnect-drop-tx", "got disconnect from fs ; dropping tx");
+                                    drop(tx)
+                                }
                                 trace!(code = "got-fs-disconnect", "got disconnect from fs ; exiting the future");
-                                // trace!(code = "closing-client-channels-on-fs-disconnect", "closing client channel");
-
-                                // for tx in  inner_commands.lock().await.iter_mut() {
-                                //     drop(tx)
-                                // }
-                                // trace!(code = "closed-client-channels-on-fs-disconnect", "closing client channel");
-            
-
-                                // if let Some(mut tx) = inner_commands.lock().await.pop_front() {
-                                    // when send_recv has sent a command to FS via send function
-                                    // it creates a oneshot channel and pushes the tx of that channel to commands 
-                                    // Here we take the last pushed tx and sends the reply event (persumably reply of the
-                                    // last fs command) received from FS
-                                    
-                                    // tx.send(event).expect("msg");
-                                    // drop(tx)
-
-                                    // for tx in  inner_commands.lock().await.iter_mut() {
-                                    //     drop(tx)
-                                    // }
-                
-                                // }
-            
                                 return;
                             }
                             "text/event-json" => {
