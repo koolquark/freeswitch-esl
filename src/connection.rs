@@ -102,9 +102,16 @@ impl EslConnection {
                         match event_type.as_str().unwrap() {
                             "text/disconnect-notice" => {
                                 trace!(code = "got-fs-disconnect-about-to-drop-all-tx", "got disconnect from fs");
-                                for tx in  inner_commands.lock().await.iter_mut() {
-                                    trace!(code = "got-fs-disconnect-drop-tx", "got disconnect from fs ; dropping tx");
-                                    drop(tx)
+                                loop {
+                                    if let Some(txc) = inner_commands.lock().await.pop_front() {
+                                        txc.send(Event {
+                                            headers: HashMap::new(), 
+                                            body: None
+                                        }).unwrap_or(());
+                                        trace!("sending event received from from fs to api user");
+                                    } else { 
+                                        break
+                                    }
                                 }
                                 trace!(code = "got-fs-disconnect", "got disconnect from fs ; exiting the future");
                                 return;
