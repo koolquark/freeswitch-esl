@@ -28,6 +28,7 @@ pub struct EslConnection {
     connected: AtomicBool,
     pub(crate) call_uuid: Option<String>,
     connection_info: Option<HashMap<String, Value>>,
+    handler_live: Arc<AtomicBool>
 }
 
 impl EslConnection {
@@ -47,10 +48,17 @@ impl EslConnection {
     }
     pub(crate) async fn send(&self, item: &[u8]) -> Result<(), EslError> {
         let cmd = std::str::from_utf8(item).unwrap_or("cant_convert");
+        
         trace!(fs_cmd = cmd, "obtain lock for transport_tx to send cmd");
         let mut transport = self.transport_tx.lock().await;
+
         trace!(fs_cmd = cmd , "sending cmd via transport_tx");
-        transport.send(item).await
+
+        match self.handler_live.load(Ordering::Relaxed) {
+            true => transport.send(item).await,
+            false => Err(EslError::InternalError("handler exited before tx".into())),
+        }
+        
     }
     /// sends raw message to freeswitch and receives reply
     pub async fn send_recv(&self, item: &[u8]) -> Result<Event, EslError> {
@@ -59,8 +67,13 @@ impl EslConnection {
         let (tx, rx) = channel();
         trace!(fs_cmd = cmd , "get lock on inner commands and push tx");
         self.commands.lock().await.push_back(tx);
+
         trace!(fs_command = cmd, "pushed tx to commands ; wait for rx event");
-        Ok(rx.await?)
+        
+        match self.handler_live.load(Ordering::Relaxed) {
+            true => Ok(rx.await?),
+            false => Err(EslError::InternalError("handler exited before rx".into()))
+        }
     }
 
     pub(crate) async fn with_tcpstream(
@@ -82,6 +95,10 @@ impl EslConnection {
         if connection_type == EslConnectionType::Inbound {
             transport_rx.next().await;
         }
+        
+        let handler_live = Arc::new(AtomicBool::new(false));
+        let handler_live_inner = handler_live.clone();
+
         let mut connection = Self {
             password: password.to_string(),
             commands,
@@ -90,6 +107,7 @@ impl EslConnection {
             connected: AtomicBool::new(false),
             call_uuid: None,
             connection_info: None,
+            handler_live: handler_live,
         };
         // up to this is init 
         // the following future lives for ever 
@@ -101,15 +119,20 @@ impl EslConnection {
                     if let Some(event_type) = event.headers.get("Content-Type") {
                         match event_type.as_str().unwrap() {
                             "text/disconnect-notice" => {
+                                handler_live_inner.store(false, Ordering::Relaxed);
                                 trace!(code = "got-fs-disconnect-about-to-drop-all-tx", "got disconnect from fs");
                                 loop {
                                     if let Some(txc) = inner_commands.lock().await.pop_front() {
-                                        txc.send(Event {
-                                            headers: HashMap::new(), 
-                                            body: None
-                                        }).unwrap_or(());
-                                        trace!("sending event received from from fs to api user");
+                                        // drop txc so that rx.await in send would exit
+                                        drop(txc);
+                                        // txc.send(Event {
+                                        //     headers: HashMap::new(), 
+                                        //     body: None
+                                        // }).unwrap_or(());
+                                        // trace!("sending event received from from fs to api user");
+                                        trace!(code = "got-fs-disconnect-drop-a-tx", "drop a tx");
                                     } else { 
+                                        // no more inner_commands
                                         break
                                     }
                                 }
@@ -192,6 +215,7 @@ impl EslConnection {
                         tx.send(event).expect("msg");
                     }
                 } else {
+                    handler_live_inner.store(false, Ordering::Relaxed);
                     trace!(code="stream_rx_none", "transport_rx next returned None");
 
                     // if let Some(mut tx) = inner_commands.lock().await.pop_front() {
@@ -218,6 +242,7 @@ impl EslConnection {
             // send connect and myevents
             EslConnectionType::Outbound => {
                 trace!("outbound -> sending_connect");
+                connection.handler_live.store(true, Ordering::Relaxed);
                 let response = connection.send_recv(b"connect").await?;
                 trace!("outbound -> sent_connect");
                 trace!("{:?}", response);
@@ -263,6 +288,8 @@ impl EslConnection {
         if connection_type == EslConnectionType::Inbound {
             transport_rx.next().await;
         }
+        let handler_live = Arc::new(AtomicBool::new(false));
+        let handler_live_inner = handler_live.clone();
         let mut connection = Self {
             password: password.to_string(),
             commands,
@@ -271,6 +298,7 @@ impl EslConnection {
             connected: AtomicBool::new(false),
             call_uuid: None,
             connection_info: None,
+            handler_live: handler_live,
         };
         // up to this is init 
         // the following future lives for ever 
@@ -436,6 +464,7 @@ impl EslConnection {
         let command  = format!("sendmsg {}\nexecute-app-name: {}\nexecute-app-arg: {}\ncall-command: execute\nEvent-UUID: {}",call_uuid,app_name,app_args,event_uuid);
         let response = self.send_recv(command.as_bytes()).await?;
         trace!("inside execute {:?}", response);
+        trace!(app_name = app_name, fs_comamnd = command, "waiting for exec result event");
         let resp = rx.await?;
         trace!("got response from channel {:?}", resp);
         Ok(resp)
