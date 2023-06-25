@@ -55,8 +55,13 @@ impl EslConnection {
         trace!(fs_cmd = cmd , "sending cmd via transport_tx");
 
         match self.handler_live.load(Ordering::Relaxed) {
-            true => transport.send(item).await,
-            false => Err(EslError::InternalError("handler exited before tx".into())),
+            true => {
+                transport.send(item).await
+            }
+            false => {
+                trace!(fs_command = cmd, code="handler_exited_before_tx", "hander exited before tx");
+                 Err(EslError::InternalError("handler exited before tx".into()))
+            }
         }
         
     }
@@ -72,7 +77,10 @@ impl EslConnection {
         
         match self.handler_live.load(Ordering::Relaxed) {
             true => Ok(rx.await?),
-            false => Err(EslError::InternalError("handler exited before rx".into()))
+            false => {
+                trace!(fs_command = cmd, code="handler_exited_before_rx", "hander exited before rx");
+                Err(EslError::InternalError("handler exited before rx".into())) 
+            }
         }
     }
 

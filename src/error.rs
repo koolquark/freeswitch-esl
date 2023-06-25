@@ -6,7 +6,7 @@ use thiserror::Error;
 #[allow(missing_docs)]
 /// Error type for Esl
 pub enum EslError {
-    #[error("unknown error")]
+    #[error("esl_error: {0:?}")]
     InternalError(String),
 
     #[error("Wrong password.")]
