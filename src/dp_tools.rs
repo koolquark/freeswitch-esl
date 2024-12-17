@@ -32,7 +32,7 @@ impl EslConnection {
         let body = parse_json_body(body).unwrap();
         let result = body.get(&format!("variable_{}", variable_name));
         let Some(digit) = result else {
-            return Err(EslError::NoInput)
+            return Err(EslError::NoInput);
         };
         let digit = digit.as_str().unwrap().to_string();
         Ok(digit)
@@ -41,6 +41,23 @@ impl EslConnection {
     /// used for mod_dptools:info
     pub async fn info(&self) -> Result<Event, EslError> {
         self.execute("info", "").await
+    }
+
+    /// used for mod_dptools:record
+    pub async fn record_app(
+        &self,
+        file_path: &str,
+        time_limit_secs: u64,
+        silence_threshold: u64,
+        silence_hits_ms: u64,
+    ) -> Result<Event, EslError> {
+        //self.execute("info", "").await
+        // record <path> [<time_limit_secs>] [<silence_threshold>] [<silence_hits>]
+        let app_name = "record";
+        let app_args =
+            format!("{file_path} {time_limit_secs} {silence_threshold} {silence_hits_ms}");
+        let event = self.execute(app_name, &app_args).await?;
+        Ok(event)
     }
 }
 
